@@ -3,9 +3,22 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <PathCch.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <stdio.h>
 #include <stdint.h>
 
-#define MimeArrLn(Arr) (sizeof(Arr) / sizeof((Arr)[0]))
+#pragma comment(lib, "ws2_32.lib")
+
+typedef intptr_t ssize_t;
+
+
+
+// Mime
+
+
+
+#define HttpArrLn(Arr) (sizeof(Arr) / sizeof((Arr)[0]))
 
 // Table from:
 // https://github.com/samuelneff/MimeTypeMap/blob/master/MimeTypeMap.cs
@@ -673,7 +686,7 @@ MimeLookupExtnW(wchar_t *Str)
  if (*Str++ == '.')
  {
    uint32_t L = 0;
-   uint32_t R = MimeArrLn(MimeTab) - 1;
+   uint32_t R = HttpArrLn(MimeTab) - 1;
    while (L <= R)
    {
     uint32_t M = L + ((R - L) / 2);
@@ -716,18 +729,10 @@ MimeLookupPathW(wchar_t *Path, size_t Ln)
 }
 
 
-#define UNICODE
-#define WIN32_LEAN_AND_MEAN
 
-// todo resolve with above
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <stdio.h>
-#include <stdint.h>
+// HTTP
 
-// Need to link with Ws2_32.lib
-#pragma comment(lib, "ws2_32.lib")
+
 
 #define HttpStrLn(Str) (sizeof(Str) / sizeof(Str[0]) - 1)
 
@@ -793,6 +798,25 @@ MimeLookupPathW(wchar_t *Path, size_t Ln)
 #define Http510 "510"
 #define Http511 "511"
 
+typedef uint32_t http_method_type;
+enum
+{
+ HttpMethodGet,
+ HttpMethodPost,
+ HttpMethodPatch,
+ HttpMethodPut,
+ HttpMethodDelete,
+};
+
+typedef struct http_parse_ctx http_parse_ctx;
+struct http_parse_ctx
+{
+ http_method_type MethodType;
+ char Path[MAX_PATH];
+ uint16_t PathLn;
+};
+
+
 // typedef struct http_fpath http_fpath;
 // struct http_fpath
 // {
@@ -826,6 +850,8 @@ MimeLookupPathW(wchar_t *Path, size_t Ln)
 
 // Helpers
 
+
+
 static void
 HttpMemcpyAdvance(uint32_t *Run, void **Dst, size_t *DstLn, void *Src, size_t SrcLn)
 {
@@ -841,6 +867,77 @@ HttpMemcpyAdvance(uint32_t *Run, void **Dst, size_t *DstLn, void *Src, size_t Sr
  }
 }
 
+
+
+// Strings
+
+
+
+static uint32_t
+ChrIsAlpha(char C)
+{
+ C |= 0x20;
+ return C >= 'a' && C <= 'z';
+}
+
+static uint32_t
+ChrIsDigit(char C)
+{
+ return C >= '0' && C <= '9';
+}
+
+static uint32_t
+ChrIsAlphaNum(char C)
+{
+ return ChrIsAlpha(C) || ChrIsDigit(C);
+}
+
+static uint32_t
+ChrIsHttpPathAcceptable(char C)
+{
+ // https://datatracker.ietf.org/doc/html/rfc3986#section-2.3
+ uint32_t IsUnreserved = ChrIsAlphaNum(C) || (C == '-') || (C == '.') || (C == '_') || (C == '~');
+
+ // Subdelims from spec minus some of the ones that windows doesn't allow for filenames
+ // https://datatracker.ietf.org/doc/html/rfc3986#section-2.2
+ // https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions
+ uint32_t IsWindowsCompatibleSubDelim = (C == '!') || (C == '$') || (C == '&') || (C == '\'') || (C == '(') || (C == ')') || (C == '+') || (C == ',') || (C == ';') || (C == '=');
+
+ // path-absolute from:
+ // https://datatracker.ietf.org/doc/html/rfc3986#section-3.3
+ return (C == '/') || IsUnreserved || IsWindowsCompatibleSubDelim || (C == '@');
+}
+
+static uint32_t
+ChrIsHex(char C)
+{
+ char A = C | 0x20;
+ return ChrIsDigit(C) || (A >= 'a' && A <= 'f');
+}
+
+static uint32_t
+ChrHexDecode(char C, char *Out)
+{
+ char A = C | 0x20;
+ if (ChrIsDigit(C))
+ {
+  *Out = C - '0';
+  return 1;
+ }
+ else if (A >= 'a' && A <= 'f')
+ {
+  *Out = A - 'a' + 10;
+  return 1;
+ }
+ return 0;
+}
+
+static uint32_t
+StrEq(char *Str1, size_t Str1Ln, char *Str2, size_t Str2Ln)
+{
+ return (Str1Ln == Str2Ln) && !memcmp(Str1, Str2, Str1Ln);
+}
+
 static uint32_t
 StrStartsWith(char *Str, size_t StrLn, char *Prefix, size_t PrefixLn)
 {
@@ -848,13 +945,12 @@ StrStartsWith(char *Str, size_t StrLn, char *Prefix, size_t PrefixLn)
 }
 
 static uint32_t
-ViewCmpShift(char **Str, size_t *StrLn, char *Prefix, size_t PrefixLn)
+ViewCmpShift(char **Str, char *StrEnd, char *Prefix, size_t PrefixLn)
 {
- if (StrStartsWith(*Str, *StrLn, Prefix, PrefixLn))
+ size_t StrLn = StrEnd - *Str;
+ if (StrStartsWith(*Str, StrLn, Prefix, PrefixLn))
  {
-  size_t ShiftLn = *StrLn > PrefixLn ? PrefixLn : *StrLn;
-  *Str += ShiftLn;
-  *StrLn -= ShiftLn;
+  *Str += StrLn > PrefixLn ? PrefixLn : StrLn;
   return 1;
  }
  return 0;
@@ -890,45 +986,216 @@ HttpCreateResponse(char * Status, char *MimeType, uint32_t MimeTypeLn, char *Bod
  }
 }
 
-typedef uint32_t http_method_type;
-enum
-{
- HttpMethodGet,
- HttpMethodPost,
- HttpMethodPatch,
- HttpMethodPut,
- HttpMethodDelete,
-};
-
-typedef struct http_parse_ctx http_parse_ctx;
-struct http_parse_ctx
-{
- http_method_type MethodType;
- char *Path;
- uint16_t PathLn;
-};
-
+// check for /. and /..
 static uint32_t
-HttpGetPath(char **View, size_t *ViewLn)
+HttpIsRelativePathSegment(char *Str, size_t StrLn)
 {
- for (size_t I = 0; I < *ViewLn; ++I)
+ char *Dot = "/.";
+ char *DotDot = "/..";
+ if (StrEq(Dot, strlen(Dot), Str, StrLn) || StrEq(DotDot, strlen(DotDot), Str, StrLn))
  {
+  return 1;
  }
+ return 0;
+}
+
+// check these as well once utf8 support added
+// "COM¹",
+// "COM²",
+// "COM³",
+// "LPT¹",
+// "LPT²",
+// "LPT³",
+// windows doesn't allow certain filenames...
+static uint32_t
+HttpIsReservedPathSegment(char *Str, size_t StrLn)
+{
+ char *ReservedNames[] = {
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  "COM1",
+  "COM2",
+  "COM3",
+  "COM4",
+  "COM5",
+  "COM6",
+  "COM7",
+  "COM8",
+  "COM9",
+  "LPT1",
+  "LPT2",
+  "LPT3",
+  "LPT4",
+  "LPT5",
+  "LPT6",
+  "LPT7",
+  "LPT8",
+  "LPT9",
+ };
+
+ for (size_t I = 0; I < HttpArrLn(ReservedNames); ++I)
+ {
+  char *Name = ReservedNames[I];
+  if (StrEq(Name, strlen(Name), Str, StrLn))
+  {
+   return 1;
+  }
+ }
+ return 0;
 }
 
 static uint32_t
-HttpParseRequest( char *Arr, size_t ArrLn)
+HttpSegmentIter(char **Start, char *End)
 {
- char *HttpGetStr = "GET ";
-
- char *View = Arr;
- size_t ViewLn = ArrLn;
-
- if (ViewCmpShift(&View, &ViewLn, HttpGetStr, strlen(HttpGetStr)))
+ if (*Start >= End)
  {
-  // todo decode url encoded path with space at end
+  return 0;
+ }
+ while (*Start < End)
+ {
+  char C = **Start;
+  (*Start)++;
+  if (C == '/')
+  {
+   return 1;
+  }
+ }
+ return 1;
+}
 
-  // todo http version 1.1
+static char *
+HttpFindNextSpace(char *Start, char *End)
+{
+ while (Start < End)
+ {
+  if (*Start == ' ')
+  {
+   return Start;
+  }
+  Start++;
+ }
+ return 0;
+}
+
+static uint32_t
+HttpPctDecode(char *S, size_t StrLn, char *Out)
+{
+ if ((*S == '%') && (StrLn >= 3))
+ {
+  char Hex1 = 0;
+  char Hex2 = 0;
+  if (ChrHexDecode(S[1], &Hex1) && ChrHexDecode(S[2], &Hex2))
+  {
+   char Octet = (Hex1 * 16) + Hex2;
+   // only allow certain pct decodings
+   if (Octet == ' ')
+   {
+    *Out = Octet;
+    return 1;
+   }
+  }
+ }
+ return 0;
+}
+
+static uint32_t
+HttpEvaluateSegment(char *Start, char *End, char **Out, char *OutEnd)
+{
+ size_t Ln = End - Start;
+ if (HttpIsRelativePathSegment(Start, Ln) || HttpIsReservedPathSegment(Start, Ln))
+ {
+  return 0;
+ }
+
+ char *C = Start;
+ while ((C < End) && (*Out < OutEnd))
+ {
+  if (ChrIsHttpPathAcceptable(*C))
+  {
+   **Out = *C;
+   (*Out)++;
+   C++;
+  }
+  else if (*C == '%')
+  {
+   if (HttpPctDecode(C, End - C, *Out))
+   {
+    (*Out)++;
+    C += 3;
+   }
+   else
+   {
+    // faulty pct encoding
+    return 0;
+   }
+  }
+  else
+  {
+   return 0;
+  }
+ }
+ 
+ return 1;
+}
+
+static uint32_t
+HttpGetPath(char **View, char *ViewEnd, char *Out, size_t OutLn)
+{
+ uint32_t WriteLn = 0;
+ char *PathEnd = HttpFindNextSpace(*View, ViewEnd);
+ if (!PathEnd)
+ {
+  return 0;
+ }
+
+ char *O = Out;
+ char *OutEnd = O + OutLn;
+ char *LastSlash = *View;
+ while (HttpSegmentIter(View, PathEnd))
+ {
+  if (LastSlash != *View)
+  {
+   if (HttpEvaluateSegment(LastSlash, *View, &O, OutEnd))
+   {
+   }
+   else
+   {
+    // err
+    return 0;
+   }
+  }
+  LastSlash = *View;
+ }
+ return (uint32_t)(O - Out);
+}
+
+
+
+// API
+
+
+
+static uint32_t
+HttpParseRequest(char *Arr, size_t ArrLn, http_parse_ctx *Ctx)
+{
+ char *View = Arr;
+ char *ViewEnd = Arr + ArrLn;
+
+ char *HttpGetStr = "GET ";
+ if (ViewCmpShift(&View, ViewEnd, HttpGetStr, strlen(HttpGetStr)))
+ {
+  Ctx->MethodType = HttpMethodGet;
+  uint32_t WriteLn = HttpGetPath(&View, ViewEnd, Ctx->Path, Ctx->PathLn);
+  if (WriteLn)
+  {
+   // successful
+  }
+  else
+  {
+   return 0;
+  }
  }
  else
  {

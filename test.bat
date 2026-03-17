@@ -1,4 +1,4 @@
 @echo off
 
 call build.bat
-call mime_test.exe
+call .\dst\test.exe

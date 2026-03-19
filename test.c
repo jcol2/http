@@ -99,11 +99,54 @@ MimeLookupPathFailTest()
 }
 
 static uint32_t
+HttpSegmentIterTest()
+{
+ uint32_t Ret = 1;
+ // basic test
+ {
+  char *Str = "/asdf/asdf ";
+  char *Start = Str;
+  char *End = HttpFindNextSpace(Str, Str + strlen(Str));
+  uint32_t Res;
+
+  // iter 1
+  Res = HttpSegmentIter(&Start, End);
+
+  Ret &= Res;
+  Ret &= Start == (Str + 5);
+
+  // iter 2
+  Res = HttpSegmentIter(&Start, End);
+
+  Ret &= Res;
+  Ret &= Start == End;
+
+  // iter 3
+  Res = HttpSegmentIter(&Start, End);
+
+  Ret &= !Res;
+  Ret &= Start == End;
+ }
+
+ if (Ret)
+ {
+  printf("HttpSegmentIterTest passed!\n");
+ }
+ else
+ {
+  printf("HttpSegmentIterTest failed.\n");
+ }
+ 
+ return Ret;
+}
+
+static uint32_t
 HttpGetPathTest()
 {
  uint32_t Ret = 1;
+ // basic test
  {
-  char * Path          = "/asdf ";
+  char * Path          = "/asdf HTTP/1.1";
   size_t PathLn        = strlen(Path);
   
   char * In            = Path;
@@ -115,12 +158,13 @@ HttpGetPathTest()
   uint32_t WriteLn     = HttpGetPath(&In, InEnd, Out, sizeof(Out));
 
   Ret &= !!WriteLn;
-  Ret &= In == (Path + 5);
+  Ret &= In == (Path + 6);
   Ret &= StrEq(Out, WriteLn, Expect, ExpectLn);
  }
 
+ // pct encoding test
  {
-  char * Path          = "/as%20df ";
+  char * Path          = "/as%20df HTTP/1.1";
   size_t PathLn        = strlen(Path);
   
   char * In            = Path;
@@ -132,7 +176,7 @@ HttpGetPathTest()
   uint32_t WriteLn     = HttpGetPath(&In, InEnd, Out, sizeof(Out));
 
   Ret &= !!WriteLn;
-  Ret &= In == (Path + 8);
+  Ret &= In == (Path + 9);
   Ret &= StrEq(Out, WriteLn, Expect, ExpectLn);
  }
 
@@ -148,15 +192,53 @@ HttpGetPathTest()
  return Ret;
 }
 
+static uint32_t
+HttpParseRequestTest()
+{
+ uint32_t Ret = 1;
+
+ // basic test
+ {
+  char *InStr =
+   "GET /asdf HTTP/1.1\r\n"
+   "user-agent: yaak\r\n"
+   "accept: */*\r\n"
+   "host: localhost:3000\r\n"
+   "\r\n";
+  size_t InStrLn = strlen(InStr);
+  http_parse_ctx Ctx = {0};
+
+  uint32_t Res = HttpParseRequest(InStr, InStrLn, &Ctx);
+
+  char *ExpectPath = "/asdf";
+  Ret &= Res;
+  Ret &= Ctx.MethodType == HttpMethodGet;
+  Ret &= StrEq(ExpectPath, strlen(ExpectPath), Ctx.Path, Ctx.PathLn);
+ }
+
+ if (Ret)
+ {
+  printf("HttpParseRequestTest passed!\n");
+ }
+ else
+ {
+  printf("HttpParseRequestTest failed.\n");
+ }
+
+ return Ret;
+}
+
 int wmain(int argc, wchar_t const *argv[])
 {
  uint32_t FailCnt = 0;
- uint32_t TestCnt = 5;
+ uint32_t TestCnt = 7;
  FailCnt += !MimeLookupExtnTest();
  FailCnt += !MimeLookupExtnFailTest();
  FailCnt += !MimeLookupPathTest();
  FailCnt += !MimeLookupPathFailTest();
+ FailCnt += !HttpSegmentIterTest();
  FailCnt += !HttpGetPathTest();
+ FailCnt += !HttpParseRequestTest();
  printf("%d tests passed, %d tests failed.\n", TestCnt - FailCnt, FailCnt);
  return 0;
 }

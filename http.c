@@ -808,12 +808,21 @@ enum
  HttpMethodDelete,
 };
 
+typedef uint32_t http_linebreak_style;
+enum
+{
+ HttpLinebreakUndefined,
+ HttpLinebreakCrlf,
+ HttpLinebreakLf,
+};
+
 typedef struct http_parse_ctx http_parse_ctx;
 struct http_parse_ctx
 {
  http_method_type MethodType;
  char Path[MAX_PATH];
  uint16_t PathLn;
+ http_linebreak_style LinebreakStyle;
 };
 
 
@@ -941,7 +950,14 @@ StrEq(char *Str1, size_t Str1Ln, char *Str2, size_t Str2Ln)
 static uint32_t
 StrStartsWith(char *Str, size_t StrLn, char *Prefix, size_t PrefixLn)
 {
- return memcmp(Str, Prefix, StrLn > PrefixLn ? PrefixLn : StrLn) == 0;
+ return StrLn >= PrefixLn ? !memcmp(Str, Prefix, PrefixLn) : 0;
+}
+
+// case insensitive
+static uint32_t
+StrStartsWithI(char *Str, size_t StrLn, char *Prefix, size_t PrefixLn)
+{
+ return StrLn >= PrefixLn ? !_strnicmp(Str, Prefix, PrefixLn) : 0;
 }
 
 static uint32_t
@@ -950,10 +966,37 @@ ViewCmpShift(char **Str, char *StrEnd, char *Prefix, size_t PrefixLn)
  size_t StrLn = StrEnd - *Str;
  if (StrStartsWith(*Str, StrLn, Prefix, PrefixLn))
  {
-  *Str += StrLn > PrefixLn ? PrefixLn : StrLn;
+  *Str += PrefixLn;
   return 1;
  }
  return 0;
+}
+
+// case insensitive
+static uint32_t
+ViewCmpShiftI(char **Str, char *StrEnd, char *Prefix, size_t PrefixLn)
+{
+ size_t StrLn = StrEnd - *Str;
+ if (StrStartsWithI(*Str, StrLn, Prefix, PrefixLn))
+ {
+  *Str += PrefixLn;
+  return 1;
+ }
+ return 0;
+}
+
+// optional whitespace:
+// https://datatracker.ietf.org/doc/html/rfc9110#appendix-A-2
+static uint32_t
+ViewCmpShiftOWS(char **Str, char *StrEnd)
+{
+ uint32_t Ret = 0;
+ while ((*Str < StrEnd) && ((**Str == ' ') || (**Str == '\t')))
+ {
+  Ret = 1;
+  (*Str)++;
+ }
+ return Ret;
 }
 
 static size_t
@@ -1049,14 +1092,14 @@ HttpIsReservedPathSegment(char *Str, size_t StrLn)
 static uint32_t
 HttpSegmentIter(char **Start, char *End)
 {
- if (*Start >= End)
+ if ((*Start >= End) || (**Start != '/'))
  {
   return 0;
  }
  while (*Start < End)
  {
-  char C = **Start;
   (*Start)++;
+  char C = **Start;
   if (C == '/')
   {
    return 1;
@@ -1143,7 +1186,10 @@ HttpEvaluateSegment(char *Start, char *End, char **Out, char *OutEnd)
 static uint32_t
 HttpGetPath(char **View, char *ViewEnd, char *Out, size_t OutLn)
 {
- uint32_t WriteLn = 0;
+ if ((*View >= ViewEnd) || (**View != '/'))
+ {
+  return 0;
+ }
  char *PathEnd = HttpFindNextSpace(*View, ViewEnd);
  if (!PathEnd)
  {
@@ -1168,7 +1214,96 @@ HttpGetPath(char **View, char *ViewEnd, char *Out, size_t OutLn)
   }
   LastSlash = *View;
  }
- return (uint32_t)(O - Out);
+
+ // go one past space, there should be a version str here
+ *View = PathEnd + 1;
+ if (*View < ViewEnd)
+ {
+  return (uint32_t)(O - Out);
+ }
+ else
+ {
+  return 0;
+ }
+}
+
+static uint32_t
+HttpGetLinebreak(char **Str, char *StrEnd, http_parse_ctx *Ctx)
+{
+ if (Ctx->LinebreakStyle == HttpLinebreakCrlf)
+ {
+  char *LinebreakStr = "\r\n";
+  return ViewCmpShift(Str, StrEnd, LinebreakStr, strlen(LinebreakStr));
+ }
+ if (Ctx->LinebreakStyle == HttpLinebreakCrlf)
+ {
+  char *LinebreakStr = "\n";
+  return ViewCmpShift(Str, StrEnd, LinebreakStr, strlen(LinebreakStr));
+ }
+ return 0;
+}
+
+static uint32_t
+HttpGetIpv4()
+{
+// todo 
+}
+
+static uint32_t
+HttpGetIpv6()
+{
+// todo 
+}
+
+static uint32_t
+HttpGetRegName()
+{
+// todo 
+
+}
+
+// host = IP-literal / IPv4address / reg-name
+// reg-name = *( unreserved / pct-encoded / sub-delims )
+// sub-delims = "!" / "$" / "&" / "'" / "(" / ")" / "*" / "+" / "," / ";" / "="
+static uint32_t
+HttpGetHost()
+{
+// todo 
+
+}
+
+static uint32_t
+HttpGetHeader(char **View, char *ViewEnd, http_parse_ctx *Ctx)
+{
+ char *ConnectionStr = "connection:";
+ if (ViewCmpShiftI(View, ViewEnd, ConnectionStr, strlen(ConnectionStr)))
+ {
+  ViewCmpShiftOWS(View, ViewEnd);
+
+  char *CloseStr = "close";
+  char *KeepAliveStr = "keep-alive";
+  if (ViewCmpShiftI(View, ViewEnd, CloseStr, strlen(CloseStr)))
+  {
+   // todo write into enum
+  }
+  else if (ViewCmpShiftI(View, ViewEnd, KeepAliveStr, strlen(KeepAliveStr)))
+  {
+  }
+  else
+  {
+   return 0;
+  }
+ }
+
+ char *HostStr = "host:";
+ if (ViewCmpShiftI(View, ViewEnd, HostStr, strlen(HostStr)))
+ {
+  ViewCmpShiftOWS(View, ViewEnd);
+
+  // todo get host
+ }
+ 
+ return 1;
 }
 
 
@@ -1184,22 +1319,54 @@ HttpParseRequest(char *Arr, size_t ArrLn, http_parse_ctx *Ctx)
  char *ViewEnd = Arr + ArrLn;
 
  char *HttpGetStr = "GET ";
+ char *Version = "HTTP/1.1";
+ char *Lf = "\n";
+ char *Crlf = "\r\n";
+
+ // parse first ilne
  if (ViewCmpShift(&View, ViewEnd, HttpGetStr, strlen(HttpGetStr)))
  {
   Ctx->MethodType = HttpMethodGet;
-  uint32_t WriteLn = HttpGetPath(&View, ViewEnd, Ctx->Path, Ctx->PathLn);
-  if (WriteLn)
+  Ctx->PathLn = HttpGetPath(&View, ViewEnd, Ctx->Path, sizeof(Ctx->Path));
+  if (Ctx->PathLn)
   {
-   // successful
-  }
-  else
-  {
-   return 0;
+   if (ViewCmpShift(&View, ViewEnd, Version, strlen(Version)))
+   {
+    if (ViewCmpShift(&View, ViewEnd, Lf, strlen(Lf)))
+    {
+     Ctx->LinebreakStyle = HttpLinebreakCrlf;
+    }
+    else if (ViewCmpShift(&View, ViewEnd, Crlf, strlen(Crlf)))
+    {
+     Ctx->LinebreakStyle = HttpLinebreakLf;
+    }
+   }
   }
  }
- else
+
+ // todo parse headers
+ uint32_t HeaderEndFound = 0;
+ if (Ctx->LinebreakStyle != HttpLinebreakUndefined)
  {
-  return 0;
+  while (View < ViewEnd)
+  {
+   if (HttpGetLinebreak(&View, ViewEnd, Ctx))
+   {
+    HeaderEndFound = 1;
+    break;
+   }
+   if (!HttpGetHeader(&View, ViewEnd, Ctx))
+   {
+    return 0;
+   }
+  }
  }
- 
+
+ // todo "parse" body
+ if (HeaderEndFound)
+ {
+  return 1;
+ }
+
+ return 0;
 }

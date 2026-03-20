@@ -7,10 +7,184 @@
 #include <ws2tcpip.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
 typedef intptr_t ssize_t;
+
+
+
+// atoi_yy.c
+// https://github.com/ibireme/c_numconv_benchmark/blob/master/src/atoi/atoi_yy.c
+
+
+
+typedef enum {
+    atoi_result_suc = 0,
+    atoi_result_fail = 1,
+    atoi_result_overflow = 2,
+} atoi_result;
+
+/* compiler builtin check (clang) */
+#ifndef yy_has_builtin
+#   ifdef __has_builtin
+#       define yy_has_builtin(x) __has_builtin(x)
+#   else
+#       define yy_has_builtin(x) 0
+#   endif
+#endif
+
+/* compiler attribute check (gcc/clang) */
+#ifndef yy_has_attribute
+#   ifdef __has_attribute
+#       define yy_has_attribute(x) __has_attribute(x)
+#   else
+#       define yy_has_attribute(x) 0
+#   endif
+#endif
+
+/* inline */
+#ifndef yy_inline
+#   if _MSC_VER >= 1200
+#       define yy_inline __forceinline
+#   elif defined(_MSC_VER)
+#       define yy_inline __inline
+#   elif yy_has_attribute(always_inline) || __GNUC__ >= 4
+#       define yy_inline __inline__ __attribute__((always_inline))
+#   elif defined(__clang__) || defined(__GNUC__)
+#       define yy_inline __inline__
+#   elif defined(__cplusplus) || (__STDC__ >= 1 && __STDC_VERSION__ >= 199901L)
+#       define yy_inline inline
+#   else
+#       define yy_inline
+#   endif
+#endif
+
+/* likely */
+#ifndef yy_likely
+#   if yy_has_builtin(__builtin_expect) || __GNUC__ >= 4
+#       define yy_likely(expr) __builtin_expect(!!(expr), 1)
+#   else
+#       define yy_likely(expr) (expr)
+#   endif
+#endif
+
+/* unlikely */
+#ifndef yy_unlikely
+#   if yy_has_builtin(__builtin_expect) || __GNUC__ >= 4
+#       define yy_unlikely(expr) __builtin_expect(!!(expr), 0)
+#   else
+#       define yy_unlikely(expr) (expr)
+#   endif
+#endif
+
+#define repeat_in_1_8(x) { x(1) x(2) x(3) x(4) x(5) x(6) x(7) x(8) }
+
+#define repeat_in_1_17(x) { x(1) x(2) x(3) x(4) x(5) x(6) x(7) \
+                            x(8) x(9) x(10) x(11) x(12) x(13) x(14) x(15) \
+                            x(16) x(17) }
+
+#define repeat_in_1_18(x) { x(1) x(2) x(3) x(4) x(5) x(6) x(7) \
+                            x(8) x(9) x(10) x(11) x(12) x(13) x(14) x(15) \
+                            x(16) x(17) x(18) }
+
+/** Digit type */
+typedef uint8_t digi_type;
+
+/** Digit: '0'. */
+static const digi_type DIGI_TYPE_ZERO       = 1 << 0;
+
+/** Digit: [1-9]. */
+static const digi_type DIGI_TYPE_NONZERO    = 1 << 1;
+
+/** Minus sign (negative): '-'. */
+static const digi_type DIGI_TYPE_NEG        = 1 << 3;
+
+
+/** Digit type table (generate with misc/make_tables.c) */
+static const digi_type digi_table[256] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x04, 0x00, 0x08, 0x10, 0x00,
+    0x01, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
+    0x02, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+/** Match a character with specified type. */
+static yy_inline bool digi_is_type(uint8_t d, digi_type type) {
+    return (digi_table[d] & type) != 0;
+}
+
+/** Match a none zero digit: [1-9] */
+static yy_inline bool digi_is_nonzero(uint8_t d) {
+    return digi_is_type(d, DIGI_TYPE_NONZERO);
+}
+
+/** Match a digit: [0-9] */
+static yy_inline bool digi_is_digit(uint8_t d) {
+    return digi_is_type(d, DIGI_TYPE_ZERO | DIGI_TYPE_NONZERO);
+}
+
+uint32_t atoi_u32_yy(const char *str, size_t len, char **endptr, atoi_result *res) {
+    if (yy_unlikely(!digi_is_nonzero(*str))) {
+        if (*str == '0' && !digi_is_digit(str[1])) {
+            *endptr = (char *)str + 1;
+            *res = atoi_result_suc;
+        } else {
+            *endptr = (char *)str;
+            *res = atoi_result_fail;
+        }
+        return 0;
+    }
+    
+    const char *cur = str;
+    uint32_t val = (uint32_t)(*cur - '0'), add;
+    *res = atoi_result_suc;
+    
+#define expr_int(i) \
+    if (yy_likely((add = (uint32_t)(cur[i] - '0')) <= 9)) val = add + val * 10; \
+    else goto digi_end_##i;
+    repeat_in_1_8(expr_int);
+#undef expr_int
+    goto digi_more;
+    
+#define expr_end(i) \
+    digi_end_##i: *endptr = (char *)cur + i; return val;
+    repeat_in_1_8(expr_end)
+#undef expr_end
+    
+digi_more:
+    cur += 9;
+    if (digi_is_digit(*cur)) {
+        add = *cur++ - '0';
+        if ((val > UINT32_MAX / 10) ||
+            ((val == UINT32_MAX / 10) && (add > UINT32_MAX % 10)) ||
+            digi_is_digit(*cur)) {
+            while (digi_is_digit(*cur)) cur++;
+            *res = atoi_result_overflow;
+            *endptr = (char *)cur;
+            return UINT32_MAX;;
+        } else {
+            *endptr = (char *)cur;
+            return val * 10 + add;
+        }
+    } else {
+        *endptr = (char *)cur;
+        return val;
+    }
+}
 
 
 
@@ -798,7 +972,7 @@ MimeLookupPathW(wchar_t *Path, size_t Ln)
 #define Http510 "510"
 #define Http511 "511"
 
-typedef uint32_t http_method_type;
+typedef uint32_t http_method_kind;
 enum
 {
  HttpMethodGet,
@@ -816,13 +990,44 @@ enum
  HttpLinebreakLf,
 };
 
+// host header value
+typedef uint32_t http_host_kind;
+enum
+{
+ HttpHostInvalid,
+ HttpHostIpv6,
+ HttpHostIpv4,
+ HttpHostDomain,
+};
+
+// connection header value
+typedef uint32_t http_connection_kind;
+enum
+{
+ HttpConnectionClose,
+ HttpConnectionKeepAlive,
+};
+
 typedef struct http_parse_ctx http_parse_ctx;
 struct http_parse_ctx
 {
- http_method_type MethodType;
+ http_method_kind MethodType;
  char Path[MAX_PATH];
  uint16_t PathLn;
  http_linebreak_style LinebreakStyle;
+
+ // headers
+
+ http_host_kind HostKind;
+ union
+ {
+  uint32_t HostIpv4;
+  char *HostDomainName;
+  size_t HostDomainNameLn;
+ };
+ uint32_t HostPortExists;
+ uint16_t HostPort;
+ http_connection_kind ConnectionKind;
 };
 
 
@@ -901,12 +1106,16 @@ ChrIsAlphaNum(char C)
  return ChrIsAlpha(C) || ChrIsDigit(C);
 }
 
+// https://datatracker.ietf.org/doc/html/rfc3986#section-2.3
+static uint32_t
+ChrIsUriUnreserved(char C)
+{
+ return ChrIsAlphaNum(C) || (C == '-') || (C == '.') || (C == '_') || (C == '~');
+}
+
 static uint32_t
 ChrIsHttpPathAcceptable(char C)
 {
- // https://datatracker.ietf.org/doc/html/rfc3986#section-2.3
- uint32_t IsUnreserved = ChrIsAlphaNum(C) || (C == '-') || (C == '.') || (C == '_') || (C == '~');
-
  // Subdelims from spec minus some of the ones that windows doesn't allow for filenames
  // https://datatracker.ietf.org/doc/html/rfc3986#section-2.2
  // https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions
@@ -914,7 +1123,7 @@ ChrIsHttpPathAcceptable(char C)
 
  // path-absolute from:
  // https://datatracker.ietf.org/doc/html/rfc3986#section-3.3
- return (C == '/') || IsUnreserved || IsWindowsCompatibleSubDelim || (C == '@');
+ return (C == '/') || ChrIsUriUnreserved(C) || IsWindowsCompatibleSubDelim || (C == '@');
 }
 
 static uint32_t
@@ -963,11 +1172,14 @@ StrStartsWithI(char *Str, size_t StrLn, char *Prefix, size_t PrefixLn)
 static uint32_t
 ViewCmpShift(char **Str, char *StrEnd, char *Prefix, size_t PrefixLn)
 {
- size_t StrLn = StrEnd - *Str;
- if (StrStartsWith(*Str, StrLn, Prefix, PrefixLn))
+ if (*Str < StrEnd)
  {
-  *Str += PrefixLn;
-  return 1;
+  size_t StrLn = StrEnd - *Str;
+  if (StrStartsWith(*Str, StrLn, Prefix, PrefixLn))
+  {
+   *Str += PrefixLn;
+   return 1;
+  }
  }
  return 0;
 }
@@ -976,11 +1188,14 @@ ViewCmpShift(char **Str, char *StrEnd, char *Prefix, size_t PrefixLn)
 static uint32_t
 ViewCmpShiftI(char **Str, char *StrEnd, char *Prefix, size_t PrefixLn)
 {
- size_t StrLn = StrEnd - *Str;
- if (StrStartsWithI(*Str, StrLn, Prefix, PrefixLn))
+ if (*Str < StrEnd)
  {
-  *Str += PrefixLn;
-  return 1;
+  size_t StrLn = StrEnd - *Str;
+  if (StrStartsWithI(*Str, StrLn, Prefix, PrefixLn))
+  {
+   *Str += PrefixLn;
+   return 1;
+  }
  }
  return 0;
 }
@@ -997,36 +1212,6 @@ ViewCmpShiftOWS(char **Str, char *StrEnd)
   (*Str)++;
  }
  return Ret;
-}
-
-static size_t
-HttpCreateResponse(char * Status, char *MimeType, uint32_t MimeTypeLn, char *Body, size_t BodyLn, char *Out, size_t OutLn)
-{
- char *FirstLine = "HTTP/1.1 ";
- char *NewLine = "\r\n";
- char *ContentType = "Content-Type: ";
- char *ConnectionClose = "Connection: close";
- uint32_t Run = 1;
- void *OutView = Out;
- size_t OutViewLn = OutLn;
- HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, FirstLine, strlen(FirstLine));
- HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, Status, 3);
- HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, NewLine, strlen(NewLine));
- HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, ContentType, strlen(ContentType));
- HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, MimeType, MimeTypeLn);
- HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, NewLine, strlen(NewLine));
- HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, ConnectionClose, strlen(ConnectionClose));
- HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, NewLine, strlen(NewLine));
- HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, NewLine, strlen(NewLine));
- HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, Body, BodyLn);
- if (Run)
- {
-  return (char *)OutView - Out;
- }
- else
- {
-  return 0;
- }
 }
 
 // check for /. and /..
@@ -1244,32 +1429,130 @@ HttpGetLinebreak(char **Str, char *StrEnd, http_parse_ctx *Ctx)
 }
 
 static uint32_t
-HttpGetIpv4()
+HttpGetU32(char **Str, char *StrEnd, uint32_t *Out)
 {
-// todo 
+ if (*Str < StrEnd)
+ {
+  size_t StrLn = StrEnd - *Str;
+  char *End = 0;
+  atoi_result Res = 0;
+  uint32_t N = atoi_u32_yy(*Str, StrLn, &End, &Res);
+  if (Res == atoi_result_suc)
+  {
+   *Str = End;
+   *Out = N;
+   return 1;
+  }
+ }
+ return 0;
 }
 
+// todo test?
 static uint32_t
-HttpGetIpv6()
+HttpGetIpv4(char **Str, char *StrEnd, uint32_t *Out)
 {
-// todo 
+ if (*Str < StrEnd)
+ {
+  char *Dot = ".";
+
+  uint32_t N1 = 0;
+  if (!HttpGetU32(Str, StrEnd, &N1) || (N1 > 255)) return 0;
+  if (!ViewCmpShift(Str, StrEnd, Dot, strlen(Dot))) return 0;
+  uint32_t N2 = 0;
+  if (!HttpGetU32(Str, StrEnd, &N2) || (N2 > 255)) return 0;
+  if (!ViewCmpShift(Str, StrEnd, Dot, strlen(Dot))) return 0;
+  uint32_t N3 = 0;
+  if (!HttpGetU32(Str, StrEnd, &N3) || (N3 > 255)) return 0;
+  if (!ViewCmpShift(Str, StrEnd, Dot, strlen(Dot))) return 0;
+  uint32_t N4 = 0;
+  if (!HttpGetU32(Str, StrEnd, &N4) || (N4 > 255)) return 0;
+
+  *Out = N1 | (N2 << 8) | (N3 << 16) | (N4 << 24);
+  return 1;
+ }
+ return 0;
 }
 
-static uint32_t
-HttpGetRegName()
-{
 // todo 
+static uint32_t
+HttpGetIpv6(char **View, char *ViewEnd)
+{
+ return 0;
+}
 
+// todo test?
+static uint32_t
+HttpGetRegName(char **View, char *ViewEnd, char **Out, size_t OutLn)
+{
+ uint32_t Ret = 0;
+
+ while (*View < ViewEnd)
+ {
+  char C = **View;
+  uint32_t IsSubDelim = (C == "!") || (C == "$") || (C == "&") || (C == "'") || (C == "(") || (C == ")") || (C == "*") || (C == "+") || (C == ",") || (C == ";") || (C == "=");
+  
+  char Octet = 0;
+  if (IsSubDelim || ChrIsUriUnreserved(C))
+  {
+   Ret = 1;
+   (*View)++;
+  }
+  else if (HttpPctDecode(View, ViewEnd - *View, &Octet))
+  {
+   Ret = 1;
+   (*View)++;
+  }
+  else
+  {
+   break;
+  }
+ }
+ return Ret;
 }
 
 // host = IP-literal / IPv4address / reg-name
 // reg-name = *( unreserved / pct-encoded / sub-delims )
 // sub-delims = "!" / "$" / "&" / "'" / "(" / ")" / "*" / "+" / "," / ";" / "="
+// todo test?
 static uint32_t
-HttpGetHost()
+HttpGetHost(char **View, char *ViewEnd, http_parse_ctx *Ctx)
 {
-// todo 
+ if (HttpGetIpv6(View, ViewEnd))
+ {
+  Ctx->HostKind = HttpHostIpv6;
+  return 1;
+ }
+ else if (HttpGetIpv4(View, ViewEnd, &Ctx->HostIpv4))
+ {
+  Ctx->HostKind = HttpHostIpv4;
+  return 1;
+ }
+ else if (HttpGetRegName(View, ViewEnd, &Ctx->HostDomainName, &Ctx->HostDomainNameLn))
+ {
+  Ctx->HostKind = HttpHostDomain;
+  return 1;
+ }
+ return 0;
+}
 
+// todo test?
+static uint32_t
+HttpGetPort(char **View, char *ViewEnd, http_parse_ctx *Ctx)
+{
+ if (*View < ViewEnd)
+ {
+  if (**View == ':')
+  {
+   (*View)++;
+   uint32_t Port = 0;
+   if (HttpGetU32(View, ViewEnd, Port))
+   {
+    Ctx->HostPort = Port;
+    return 1;
+   }
+  }
+ }
+ return 0;
 }
 
 static uint32_t
@@ -1284,15 +1567,15 @@ HttpGetHeader(char **View, char *ViewEnd, http_parse_ctx *Ctx)
   char *KeepAliveStr = "keep-alive";
   if (ViewCmpShiftI(View, ViewEnd, CloseStr, strlen(CloseStr)))
   {
-   // todo write into enum
+   Ctx->ConnectionKind = HttpConnectionClose;
+   return 1;
   }
   else if (ViewCmpShiftI(View, ViewEnd, KeepAliveStr, strlen(KeepAliveStr)))
   {
+   Ctx->ConnectionKind = HttpConnectionKeepAlive;
+   return 1;
   }
-  else
-  {
-   return 0;
-  }
+  return 0;
  }
 
  char *HostStr = "host:";
@@ -1300,10 +1583,22 @@ HttpGetHeader(char **View, char *ViewEnd, http_parse_ctx *Ctx)
  {
   ViewCmpShiftOWS(View, ViewEnd);
 
-  // todo get host
+  if (HttpGetHost(View, ViewEnd, Ctx))
+  {
+   if (HttpGetPort(View, ViewEnd, Ctx))
+   {
+    if (HttpGetLinebreak(View, ViewEnd, Ctx))
+    {
+     return 1;
+    }
+   }
+  }
  }
+
+ // todo parse arbitrary header
+ // todo add more start < end checks in other fns?
  
- return 1;
+ return 0;
 }
 
 
@@ -1369,4 +1664,34 @@ HttpParseRequest(char *Arr, size_t ArrLn, http_parse_ctx *Ctx)
  }
 
  return 0;
+}
+
+static size_t
+HttpCreateResponse(char * Status, char *MimeType, uint32_t MimeTypeLn, char *Body, size_t BodyLn, char *Out, size_t OutLn)
+{
+ char *FirstLine = "HTTP/1.1 ";
+ char *NewLine = "\r\n";
+ char *ContentType = "Content-Type: ";
+ char *ConnectionClose = "Connection: close";
+ uint32_t Run = 1;
+ void *OutView = Out;
+ size_t OutViewLn = OutLn;
+ HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, FirstLine, strlen(FirstLine));
+ HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, Status, 3);
+ HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, NewLine, strlen(NewLine));
+ HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, ContentType, strlen(ContentType));
+ HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, MimeType, MimeTypeLn);
+ HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, NewLine, strlen(NewLine));
+ HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, ConnectionClose, strlen(ConnectionClose));
+ HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, NewLine, strlen(NewLine));
+ HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, NewLine, strlen(NewLine));
+ HttpMemcpyAdvance(&Run, &OutView, &OutViewLn, Body, BodyLn);
+ if (Run)
+ {
+  return (char *)OutView - Out;
+ }
+ else
+ {
+  return 0;
+ }
 }

@@ -197,8 +197,12 @@ Utf8Validate(char *Str, size_t StrLen)
 {
  for (size_t I = 0; I < StrLen; ++I)
  {
-  char C = Str[I];
-  if (C <= 0x7F)
+  uint8_t C = Str[I];
+  if (C == 0)
+  {
+   return 0;
+  }
+  else if (C <= 0x7F)
   {
    // do nothing
   }
@@ -344,7 +348,7 @@ Utf8Validate(char *Str, size_t StrLen)
     return 0;
    }
    C = Str[I];
-   if (((C & 0xC0) != 0x80) || (C >= 0xA0 && C <= 0xBF))
+   if (C >= 0x90)
    {
     return 0;
    }

@@ -188,6 +188,197 @@ digi_more:
 
 
 
+// Utf8 Validation
+
+
+
+static uint32_t
+Utf8Validate(char *Str, size_t StrLen)
+{
+ for (size_t I = 0; I < StrLen; ++I)
+ {
+  char C = Str[I];
+  if (C <= 0x7F)
+  {
+   // do nothing
+  }
+  else if (C >= 0xC2 && C <= 0xDF)
+  {
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+  }
+  else if (C == 0xE0)
+  {
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if (((C & 0xC0) != 0x80) || (C >= 0x80 && C <= 0x9F))
+   {
+    return 0;
+   }
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+  }
+  else if (C == 0xED)
+  {
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if (C >= 0xA0)
+   {
+    return 0;
+   }
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+  }
+  else if ((C >= 0xE1 && C <= 0xEC) || C == 0XEE || C == 0xEF)
+  {
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+  }
+  else if (C == 0xF0)
+  {
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if (((C & 0xC0) != 0x80) || (C >= 0x80 && C <= 0x8F))
+   {
+    return 0;
+   }
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+  }
+  else if (C >= 0xF1 && C <= 0xF3)
+  {
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if (((C & 0xC0) != 0x80))
+   {
+    return 0;
+   }
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+  }
+  else if (C == 0xF4)
+  {
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if (((C & 0xC0) != 0x80) || (C >= 0xA0 && C <= 0xBF))
+   {
+    return 0;
+   }
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+   if (++I >= StrLen)
+   {
+    return 0;
+   }
+   C = Str[I];
+   if ((C & 0xC0) != 0x80)
+   {
+    return 0;
+   }
+  }
+  else
+  {
+   return 0;
+  }
+ }
+
+ return 1;
+}
+
+
+
+
 // Mime
 
 
@@ -1482,14 +1673,15 @@ HttpGetIpv6(char **View, char *ViewEnd)
 
 // todo test?
 static uint32_t
-HttpGetRegName(char **View, char *ViewEnd, char **Out, size_t OutLn)
+HttpGetRegName(char **View, char *ViewEnd, char **Out, size_t *OutLn)
 {
+ // todo change this api so Out can actually be written to!
  uint32_t Ret = 0;
 
  while (*View < ViewEnd)
  {
   char C = **View;
-  uint32_t IsSubDelim = (C == "!") || (C == "$") || (C == "&") || (C == "'") || (C == "(") || (C == ")") || (C == "*") || (C == "+") || (C == ",") || (C == ";") || (C == "=");
+  uint32_t IsSubDelim = (C == '!') || (C == '$') || (C == '&') || (C == '\'') || (C == '(') || (C == ')') || (C == '*') || (C == '+') || (C == ',') || (C == ';') || (C == '=');
   
   char Octet = 0;
   if (IsSubDelim || ChrIsUriUnreserved(C))
@@ -1497,7 +1689,7 @@ HttpGetRegName(char **View, char *ViewEnd, char **Out, size_t OutLn)
    Ret = 1;
    (*View)++;
   }
-  else if (HttpPctDecode(View, ViewEnd - *View, &Octet))
+  else if (HttpPctDecode(*View, ViewEnd - *View, &Octet))
   {
    Ret = 1;
    (*View)++;
@@ -1545,7 +1737,7 @@ HttpGetPort(char **View, char *ViewEnd, http_parse_ctx *Ctx)
   {
    (*View)++;
    uint32_t Port = 0;
-   if (HttpGetU32(View, ViewEnd, Port))
+   if (HttpGetU32(View, ViewEnd, &Port))
    {
     Ctx->HostPort = Port;
     return 1;

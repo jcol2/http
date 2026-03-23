@@ -1217,8 +1217,11 @@ struct http_parse_ctx
  union
  {
   uint32_t HostIpv4;
-  char *HostDomainName;
-  size_t HostDomainNameLn;
+  struct
+  {
+   char HostDomainName[255];
+   size_t HostDomainNameLn;
+  };
  };
  uint32_t HostPortExists;
  uint16_t HostPort;
@@ -1511,13 +1514,8 @@ HttpPctDecode(char *S, size_t StrLn, char *Out)
   char Hex2 = 0;
   if (ChrHexDecode(S[1], &Hex1) && ChrHexDecode(S[2], &Hex2))
   {
-   char Octet = (Hex1 * 16) + Hex2;
-   // only allow certain pct decodings
-   if (Octet == ' ')
-   {
-    *Out = Octet;
-    return 1;
-   }
+   *Out = (Hex1 * 16) + Hex2;
+   return 1;
   }
  }
  return 0;
@@ -1543,10 +1541,11 @@ HttpEvaluateSegment(char *Start, char *End, char **Out, char *OutEnd)
   }
   else if (*C == '%')
   {
-   if (HttpPctDecode(C, End - C, *Out))
+   // only allow certain pct decodings
+   if (HttpPctDecode(C, End - C, *Out) && **Out == ' ')
    {
-    (*Out)++;
-    C += 3;
+     (*Out)++;
+     C += 3;
    }
    else
    {
@@ -1642,7 +1641,6 @@ HttpGetU32(char **Str, char *StrEnd, uint32_t *Out)
  return 0;
 }
 
-// todo test?
 static uint32_t
 HttpGetIpv4(char **Str, char *StrEnd, uint32_t *Out)
 {
@@ -1675,14 +1673,13 @@ HttpGetIpv6(char **View, char *ViewEnd)
  return 0;
 }
 
-// todo test?
-static uint32_t
-HttpGetRegName(char **View, char *ViewEnd, char **Out, size_t *OutLn)
+// return bytes written to Out
+static size_t
+HttpGetRegName(char **View, char *ViewEnd, char *Out, size_t OutLn)
 {
- // todo change this api so Out can actually be written to!
- uint32_t Ret = 0;
+ uint32_t WriteLn = 0;
 
- while (*View < ViewEnd)
+ while (*View < ViewEnd && WriteLn < OutLn)
  {
   char C = **View;
   uint32_t IsSubDelim = (C == '!') || (C == '$') || (C == '&') || (C == '\'') || (C == '(') || (C == ')') || (C == '*') || (C == '+') || (C == ',') || (C == ';') || (C == '=');
@@ -1690,26 +1687,33 @@ HttpGetRegName(char **View, char *ViewEnd, char **Out, size_t *OutLn)
   char Octet = 0;
   if (IsSubDelim || ChrIsUriUnreserved(C))
   {
-   Ret = 1;
+   Out[WriteLn++] = C;
    (*View)++;
   }
   else if (HttpPctDecode(*View, ViewEnd - *View, &Octet))
   {
-   Ret = 1;
-   (*View)++;
+   Out[WriteLn++] = Octet;
+   *View += 3;
   }
   else
   {
    break;
   }
  }
- return Ret;
+
+ if (Utf8Validate(Out, WriteLn))
+ {
+  return WriteLn;
+ }
+ else
+ {
+  return 0;
+ }
 }
 
 // host = IP-literal / IPv4address / reg-name
 // reg-name = *( unreserved / pct-encoded / sub-delims )
 // sub-delims = "!" / "$" / "&" / "'" / "(" / ")" / "*" / "+" / "," / ";" / "="
-// todo test?
 static uint32_t
 HttpGetHost(char **View, char *ViewEnd, http_parse_ctx *Ctx)
 {
@@ -1723,10 +1727,15 @@ HttpGetHost(char **View, char *ViewEnd, http_parse_ctx *Ctx)
   Ctx->HostKind = HttpHostIpv4;
   return 1;
  }
- else if (HttpGetRegName(View, ViewEnd, &Ctx->HostDomainName, &Ctx->HostDomainNameLn))
+ else
  {
-  Ctx->HostKind = HttpHostDomain;
-  return 1;
+  Ctx->HostDomainNameLn = HttpGetRegName(View, ViewEnd, Ctx->HostDomainName, sizeof(Ctx->HostDomainName));
+  if (Ctx->HostDomainNameLn)
+  {
+   Ctx->HostKind = HttpHostDomain;
+   return 1;
+  }
+  return 0;
  }
  return 0;
 }
@@ -1781,12 +1790,10 @@ HttpGetHeader(char **View, char *ViewEnd, http_parse_ctx *Ctx)
 
   if (HttpGetHost(View, ViewEnd, Ctx))
   {
-   if (HttpGetPort(View, ViewEnd, Ctx))
+   HttpGetPort(View, ViewEnd, Ctx);
+   if (HttpGetLinebreak(View, ViewEnd, Ctx))
    {
-    if (HttpGetLinebreak(View, ViewEnd, Ctx))
-    {
-     return 1;
-    }
+    return 1;
    }
   }
  }

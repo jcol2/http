@@ -1678,8 +1678,10 @@ static size_t
 HttpGetRegName(char **View, char *ViewEnd, char *Out, size_t OutLn)
 {
  uint32_t WriteLn = 0;
+ // max dns name 253 chars, excluding root domain '.' and null terminator
+ uint32_t Fuel = 253;
 
- while (*View < ViewEnd && WriteLn < OutLn)
+ while (*View < ViewEnd && WriteLn < OutLn && Fuel--)
  {
   char C = **View;
   uint32_t IsSubDelim = (C == '!') || (C == '$') || (C == '&') || (C == '\'') || (C == '(') || (C == ')') || (C == '*') || (C == '+') || (C == ',') || (C == ';') || (C == '=');

@@ -405,13 +405,17 @@ HttpGetHostTest()
   Ret &= Ctx.HostKind == HttpHostInvalid;
  }
 
- // todo validate that it only takes 254 bytes off
+ // takes 253 bytes off
  {
-  char *Str = "as%20df";
+  char Str[260] = {0};
+  memset(Str, 'a', sizeof(Str));
+  Str[sizeof(Str) - 1] = 0;
   char *View = Str;
   char *ViewEnd = Str + strlen(Str);
   http_parse_ctx Ctx = {0};
-  char *Expect = "as df";
+  char Expect[254] = {0};
+  memset(Expect, 'a', sizeof(Expect));
+  Expect[sizeof(Expect) - 1] = 0;
 
   uint32_t Res = HttpGetHost(&View, ViewEnd, &Ctx);
   Ret &= Res;

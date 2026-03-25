@@ -1304,6 +1304,50 @@ ChrIsAlphaNum(char C)
  return ChrIsAlpha(C) || ChrIsDigit(C);
 }
 
+// from abnf spec:
+// https://www.rfc-editor.org/rfc/rfc5234
+static uint32_t
+ChrIsVChar(char C)
+{
+ return (uint8_t)C >= 0x21 && (uint8_t)C <= 0x7E;
+}
+
+static uint32_t
+ChrIsSubdelim(char C)
+{
+ return C == '!' || C == '$' || C == '&' || C == '\'' || C == '(' || C == ')' || C == '*' || C == '+' || C == ',' || C == ';' || C == '=';
+}
+
+// https://datatracker.ietf.org/doc/html/rfc9110#name-tokens
+static uint32_t
+ChrIsTChar(char C)
+{
+ return C == '!' || C == '#' || C == '$' || C == '%' || C == '&' || C == '\'' || C == '*'
+   || C == '+' || C == '-' || C == '.' || C == '^' || C == '_' || C == '`' || C == '|' || C == '~' || ChrIsAlphaNum(C);
+}
+
+// 0x80 - 0xFF, latin supplement
+// https://datatracker.ietf.org/doc/html/rfc9110#name-field-values
+static uint32_t
+ChrIsObsText(char C)
+{
+ return (uint8_t)C >= 0x80;
+}
+
+// https://datatracker.ietf.org/doc/html/rfc9110#name-field-values
+static uint32_t
+ChrIsHttpFieldVChar(char C)
+{
+ return ChrIsVChar(C) || ChrIsObsText(C);
+}
+
+// https://datatracker.ietf.org/doc/html/rfc9110#name-field-values
+static uint32_t
+ChrIsHttpFieldContent(char C)
+{
+ return ChrIsHttpFieldVChar(C) || C == ' ' || C == '\t';
+}
+
 // https://datatracker.ietf.org/doc/html/rfc3986#section-2.3
 static uint32_t
 ChrIsUriUnreserved(char C)
@@ -1614,7 +1658,7 @@ HttpGetLinebreak(char **Str, char *StrEnd, http_parse_ctx *Ctx)
   char *LinebreakStr = "\r\n";
   return ViewCmpShift(Str, StrEnd, LinebreakStr, strlen(LinebreakStr));
  }
- if (Ctx->LinebreakStyle == HttpLinebreakCrlf)
+ if (Ctx->LinebreakStyle == HttpLinebreakLf)
  {
   char *LinebreakStr = "\n";
   return ViewCmpShift(Str, StrEnd, LinebreakStr, strlen(LinebreakStr));
@@ -1673,9 +1717,10 @@ HttpGetIpv6(char **View, char *ViewEnd)
  return 0;
 }
 
+// todo switch over to more strict checking instead of generic pct decoding / utf validation + no whitespace!
 // return bytes written to Out
 static size_t
-HttpGetRegName(char **View, char *ViewEnd, char *Out, size_t OutLn)
+HttpGetRegisteredName(char **View, char *ViewEnd, char *Out, size_t OutLn)
 {
  uint32_t WriteLn = 0;
  // max dns name 253 chars, excluding root domain '.' and null terminator
@@ -1684,7 +1729,7 @@ HttpGetRegName(char **View, char *ViewEnd, char *Out, size_t OutLn)
  while (*View < ViewEnd && WriteLn < OutLn && Fuel--)
  {
   char C = **View;
-  uint32_t IsSubDelim = (C == '!') || (C == '$') || (C == '&') || (C == '\'') || (C == '(') || (C == ')') || (C == '*') || (C == '+') || (C == ',') || (C == ';') || (C == '=');
+  uint32_t IsSubDelim = ChrIsSubdelim(C);
   
   char Octet = 0;
   if (IsSubDelim || ChrIsUriUnreserved(C))
@@ -1731,7 +1776,7 @@ HttpGetHost(char **View, char *ViewEnd, http_parse_ctx *Ctx)
  }
  else
  {
-  Ctx->HostDomainNameLn = HttpGetRegName(View, ViewEnd, Ctx->HostDomainName, sizeof(Ctx->HostDomainName));
+  Ctx->HostDomainNameLn = HttpGetRegisteredName(View, ViewEnd, Ctx->HostDomainName, sizeof(Ctx->HostDomainName));
   if (Ctx->HostDomainNameLn)
   {
    Ctx->HostKind = HttpHostDomain;
@@ -1756,6 +1801,56 @@ HttpGetPort(char **View, char *ViewEnd, http_parse_ctx *Ctx)
    {
     Ctx->HostPort = Port;
     return 1;
+   }
+  }
+ }
+ return 0;
+}
+
+static uint32_t
+HttpGetArbitraryHeader(char **View, char *ViewEnd, http_parse_ctx *Ctx)
+{
+ uint32_t GotHeaderName = 0;
+ uint32_t AtLeastOneTchar = 0;
+ while (*View < ViewEnd)
+ {
+  uint8_t C = **View;
+  uint32_t IsTchar = ChrIsTChar(C);
+  if (IsTchar)
+  {
+   (*View)++;
+   AtLeastOneTchar = 1;
+  }
+  else if (C == ':' && AtLeastOneTchar)
+  {
+   (*View)++;
+   GotHeaderName = 1;
+   break;
+  }
+  else
+  {
+   GotHeaderName = 0;
+   break;
+  }
+ }
+
+ if (GotHeaderName)
+ {
+  uint32_t AtLeastOneFieldContent = 0;
+  while (*View < ViewEnd)
+  {
+   if (ChrIsHttpFieldContent(**View))
+   {
+    AtLeastOneFieldContent = 1;
+    (*View)++;
+   }
+   else if (AtLeastOneFieldContent && HttpGetLinebreak(View, ViewEnd, Ctx))
+   {
+    return 1;
+   }
+   else
+   {
+    break;
    }
   }
  }
@@ -1800,8 +1895,10 @@ HttpGetHeader(char **View, char *ViewEnd, http_parse_ctx *Ctx)
   }
  }
 
- // todo parse arbitrary header
- // todo add more start < end checks in other fns?
+ if (HttpGetArbitraryHeader(View, ViewEnd, Ctx))
+ {
+  return 1;
+ }
  
  return 0;
 }
@@ -1834,17 +1931,16 @@ HttpParseRequest(char *Arr, size_t ArrLn, http_parse_ctx *Ctx)
    {
     if (ViewCmpShift(&View, ViewEnd, Lf, strlen(Lf)))
     {
-     Ctx->LinebreakStyle = HttpLinebreakCrlf;
+     Ctx->LinebreakStyle = HttpLinebreakLf;
     }
     else if (ViewCmpShift(&View, ViewEnd, Crlf, strlen(Crlf)))
     {
-     Ctx->LinebreakStyle = HttpLinebreakLf;
+     Ctx->LinebreakStyle = HttpLinebreakCrlf;
     }
    }
   }
  }
 
- // todo parse headers
  uint32_t HeaderEndFound = 0;
  if (Ctx->LinebreakStyle != HttpLinebreakUndefined)
  {
@@ -1900,3 +1996,5 @@ HttpCreateResponse(char * Status, char *MimeType, uint32_t MimeTypeLn, char *Bod
   return 0;
  }
 }
+
+// todo add more start < end checks in other fns?

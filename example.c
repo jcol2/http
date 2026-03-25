@@ -99,17 +99,20 @@ wmain(int32_t ArgC, void **ArgV)
   int32_t WriteLn = recv(ClientSck, RecArr, sizeof(RecArr) - 1, 0);
 
   printf("%s", RecArr);
-  // todo Parse the message!
-  // todo Extract the path.
+  http_parse_ctx Ctx = {0};
+  char ResArr[8192] = {0};
+  size_t ResWriteLn = 0;
+  if (HttpParseRequest(RecArr, WriteLn, &Ctx))
+  {
+   printf("Received request at: %.*s:%d%.*s\n", (int)Ctx.HostDomainNameLn, Ctx.HostDomainName, Ctx.HostPort, (int)Ctx.PathLn, Ctx.Path);
+   char *MimeType = "text/html";
+   char *Body = "<html><body><h1>Hello from C HTTP Server</h1></body></html>";
+   ResWriteLn = HttpCreateResponse(Http200, MimeType, (uint32_t)strlen(MimeType), Body, strlen(Body), ResArr, sizeof(ResArr));
+  }
 
   // todo use the path to create full file path
   // todo read the file
   // todo extract mime
-
-  char *MimeType = "text/html";
-  char *Body = "<html><body><h1>Hello from C HTTP Server</h1></body></html>";
-  char ResArr[8192] = {0};
-  size_t ResWriteLn = HttpCreateResponse(Http200, MimeType, (uint32_t)strlen(MimeType), Body, strlen(Body), ResArr, sizeof(ResArr));
 
   if (ResWriteLn)
   {

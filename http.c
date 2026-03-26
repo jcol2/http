@@ -1199,6 +1199,7 @@ enum
 typedef uint32_t http_connection_kind;
 enum
 {
+ HttpConnectionUndefined,
  HttpConnectionClose,
  HttpConnectionKeepAlive,
 };
@@ -1223,7 +1224,6 @@ struct http_parse_ctx
    size_t HostDomainNameLn;
   };
  };
- uint32_t HostPortExists;
  uint16_t HostPort;
  http_connection_kind ConnectionKind;
 };
@@ -1326,26 +1326,11 @@ ChrIsTChar(char C)
    || C == '+' || C == '-' || C == '.' || C == '^' || C == '_' || C == '`' || C == '|' || C == '~' || ChrIsAlphaNum(C);
 }
 
-// 0x80 - 0xFF, latin supplement
-// https://datatracker.ietf.org/doc/html/rfc9110#name-field-values
-static uint32_t
-ChrIsObsText(char C)
-{
- return (uint8_t)C >= 0x80;
-}
-
-// https://datatracker.ietf.org/doc/html/rfc9110#name-field-values
-static uint32_t
-ChrIsHttpFieldVChar(char C)
-{
- return ChrIsVChar(C) || ChrIsObsText(C);
-}
-
 // https://datatracker.ietf.org/doc/html/rfc9110#name-field-values
 static uint32_t
 ChrIsHttpFieldContent(char C)
 {
- return ChrIsHttpFieldVChar(C) || C == ' ' || C == '\t';
+ return ChrIsVChar(C) || C == ' ' || C == '\t';
 }
 
 // https://datatracker.ietf.org/doc/html/rfc3986#section-2.3
@@ -1392,6 +1377,12 @@ ChrHexDecode(char C, char *Out)
  return 0;
 }
 
+static char
+ChrToLower(char C)
+{
+ return ChrIsAlpha(C) ? C | 0x20 : C;
+}
+
 static uint32_t
 StrEq(char *Str1, size_t Str1Ln, char *Str2, size_t Str2Ln)
 {
@@ -1412,14 +1403,14 @@ StrStartsWithI(char *Str, size_t StrLn, char *Prefix, size_t PrefixLn)
 }
 
 static uint32_t
-ViewCmpShift(char **Str, char *StrEnd, char *Prefix, size_t PrefixLn)
+ViewCmpShift(char **View, char *ViewEnd, char *Prefix, size_t PrefixLn)
 {
- if (*Str < StrEnd)
+ if (*View < ViewEnd)
  {
-  size_t StrLn = StrEnd - *Str;
-  if (StrStartsWith(*Str, StrLn, Prefix, PrefixLn))
+  size_t StrLn = ViewEnd - *View;
+  if (StrStartsWith(*View, StrLn, Prefix, PrefixLn))
   {
-   *Str += PrefixLn;
+   *View += PrefixLn;
    return 1;
   }
  }
@@ -1428,14 +1419,14 @@ ViewCmpShift(char **Str, char *StrEnd, char *Prefix, size_t PrefixLn)
 
 // case insensitive
 static uint32_t
-ViewCmpShiftI(char **Str, char *StrEnd, char *Prefix, size_t PrefixLn)
+ViewCmpShiftI(char **View, char *ViewEnd, char *Prefix, size_t PrefixLn)
 {
- if (*Str < StrEnd)
+ if (*View < ViewEnd)
  {
-  size_t StrLn = StrEnd - *Str;
-  if (StrStartsWithI(*Str, StrLn, Prefix, PrefixLn))
+  size_t StrLn = ViewEnd - *View;
+  if (StrStartsWithI(*View, StrLn, Prefix, PrefixLn))
   {
-   *Str += PrefixLn;
+   *View += PrefixLn;
    return 1;
   }
  }
@@ -1445,13 +1436,13 @@ ViewCmpShiftI(char **Str, char *StrEnd, char *Prefix, size_t PrefixLn)
 // optional whitespace:
 // https://datatracker.ietf.org/doc/html/rfc9110#appendix-A-2
 static uint32_t
-ViewCmpShiftOWS(char **Str, char *StrEnd)
+ViewCmpShiftOWS(char **View, char *ViewEnd)
 {
  uint32_t Ret = 0;
- while ((*Str < StrEnd) && ((**Str == ' ') || (**Str == '\t')))
+ while ((*View < ViewEnd) && ((**View == ' ') || (**View == '\t')))
  {
   Ret = 1;
-  (*Str)++;
+  (*View)++;
  }
  return Ret;
 }
@@ -1517,16 +1508,16 @@ HttpIsReservedPathSegment(char *Str, size_t StrLn)
 }
 
 static uint32_t
-HttpSegmentIter(char **Start, char *End)
+HttpSegmentIter(char **View, char *ViewEnd)
 {
- if ((*Start >= End) || (**Start != '/'))
+ if ((*View >= ViewEnd) || (**View != '/'))
  {
   return 0;
  }
- while (*Start < End)
+ while (*View < ViewEnd)
  {
-  (*Start)++;
-  char C = **Start;
+  (*View)++;
+  char C = **View;
   if (C == '/')
   {
    return 1;
@@ -1651,33 +1642,33 @@ HttpGetPath(char **View, char *ViewEnd, char *Out, size_t OutLn)
 }
 
 static uint32_t
-HttpGetLinebreak(char **Str, char *StrEnd, http_parse_ctx *Ctx)
+HttpGetLinebreak(char **View, char *ViewEnd, http_parse_ctx *Ctx)
 {
  if (Ctx->LinebreakStyle == HttpLinebreakCrlf)
  {
   char *LinebreakStr = "\r\n";
-  return ViewCmpShift(Str, StrEnd, LinebreakStr, strlen(LinebreakStr));
+  return ViewCmpShift(View, ViewEnd, LinebreakStr, strlen(LinebreakStr));
  }
  if (Ctx->LinebreakStyle == HttpLinebreakLf)
  {
   char *LinebreakStr = "\n";
-  return ViewCmpShift(Str, StrEnd, LinebreakStr, strlen(LinebreakStr));
+  return ViewCmpShift(View, ViewEnd, LinebreakStr, strlen(LinebreakStr));
  }
  return 0;
 }
 
 static uint32_t
-HttpGetU32(char **Str, char *StrEnd, uint32_t *Out)
+HttpGetU32(char **View, char *ViewEnd, uint32_t *Out)
 {
- if (*Str < StrEnd)
+ if (*View < ViewEnd)
  {
-  size_t StrLn = StrEnd - *Str;
+  size_t StrLn = ViewEnd - *View;
   char *End = 0;
   atoi_result Res = 0;
-  uint32_t N = atoi_u32_yy(*Str, StrLn, &End, &Res);
+  uint32_t N = atoi_u32_yy(*View, StrLn, &End, &Res);
   if (Res == atoi_result_suc)
   {
-   *Str = End;
+   *View = End;
    *Out = N;
    return 1;
   }
@@ -1686,23 +1677,23 @@ HttpGetU32(char **Str, char *StrEnd, uint32_t *Out)
 }
 
 static uint32_t
-HttpGetIpv4(char **Str, char *StrEnd, uint32_t *Out)
+HttpGetIpv4(char **View, char *ViewEnd, uint32_t *Out)
 {
- if (*Str < StrEnd)
+ if (*View < ViewEnd)
  {
   char *Dot = ".";
 
   uint32_t N1 = 0;
-  if (!HttpGetU32(Str, StrEnd, &N1) || (N1 > 255)) return 0;
-  if (!ViewCmpShift(Str, StrEnd, Dot, strlen(Dot))) return 0;
+  if (!HttpGetU32(View, ViewEnd, &N1) || (N1 > 255)) return 0;
+  if (!ViewCmpShift(View, ViewEnd, Dot, strlen(Dot))) return 0;
   uint32_t N2 = 0;
-  if (!HttpGetU32(Str, StrEnd, &N2) || (N2 > 255)) return 0;
-  if (!ViewCmpShift(Str, StrEnd, Dot, strlen(Dot))) return 0;
+  if (!HttpGetU32(View, ViewEnd, &N2) || (N2 > 255)) return 0;
+  if (!ViewCmpShift(View, ViewEnd, Dot, strlen(Dot))) return 0;
   uint32_t N3 = 0;
-  if (!HttpGetU32(Str, StrEnd, &N3) || (N3 > 255)) return 0;
-  if (!ViewCmpShift(Str, StrEnd, Dot, strlen(Dot))) return 0;
+  if (!HttpGetU32(View, ViewEnd, &N3) || (N3 > 255)) return 0;
+  if (!ViewCmpShift(View, ViewEnd, Dot, strlen(Dot))) return 0;
   uint32_t N4 = 0;
-  if (!HttpGetU32(Str, StrEnd, &N4) || (N4 > 255)) return 0;
+  if (!HttpGetU32(View, ViewEnd, &N4) || (N4 > 255)) return 0;
 
   *Out = N1 | (N2 << 8) | (N3 << 16) | (N4 << 24);
   return 1;
@@ -1717,30 +1708,44 @@ HttpGetIpv6(char **View, char *ViewEnd)
  return 0;
 }
 
-// todo switch over to more strict checking instead of generic pct decoding / utf validation + no whitespace!
+// todo idna2008 punycode support
 // return bytes written to Out
 static size_t
-HttpGetRegisteredName(char **View, char *ViewEnd, char *Out, size_t OutLn)
+HttpGetDomainName(char **View, char *ViewEnd, char *Out, size_t OutLn)
 {
- uint32_t WriteLn = 0;
+ size_t WriteLn = 0;
  // max dns name 253 chars, excluding root domain '.' and null terminator
  uint32_t Fuel = 253;
+ // each name can only be a 63 chars long
+ uint32_t DotFuel = 64;
 
- while (*View < ViewEnd && WriteLn < OutLn && Fuel--)
+ // need to keep track of last seen chr since the name could end in '.'
+ char LastChr = 0;
+ uint32_t JustSawDot = 0;
+ while (*View < ViewEnd && WriteLn < OutLn && Fuel-- && DotFuel--)
  {
   char C = **View;
-  uint32_t IsSubDelim = ChrIsSubdelim(C);
-  
-  char Octet = 0;
-  if (IsSubDelim || ChrIsUriUnreserved(C))
+  if ((ChrIsAlphaNum(C) || C == '-'))
   {
+   if (!DotFuel)
+   {
+    return 0;
+   }
+   Out[WriteLn++] = ChrToLower(C);
+   (*View)++;
+   LastChr = C;
+   JustSawDot = 0;
+  }
+  else if (C == '.')
+  {
+   if (JustSawDot)
+   {
+    return 0;
+   }
    Out[WriteLn++] = C;
    (*View)++;
-  }
-  else if (HttpPctDecode(*View, ViewEnd - *View, &Octet))
-  {
-   Out[WriteLn++] = Octet;
-   *View += 3;
+   DotFuel = 64;
+   JustSawDot = 1;
   }
   else
   {
@@ -1748,14 +1753,17 @@ HttpGetRegisteredName(char **View, char *ViewEnd, char *Out, size_t OutLn)
   }
  }
 
- if (Utf8Validate(Out, WriteLn))
+ // get rid of root domain
+ if (WriteLn && Out[WriteLn - 1] == '.')
+ {
+  Out[--WriteLn] = 0;
+ }
+
+ if (WriteLn && ChrIsAlpha(Out[0]) && ChrIsAlphaNum(LastChr))
  {
   return WriteLn;
  }
- else
- {
-  return 0;
- }
+ return 0;
 }
 
 // host = IP-literal / IPv4address / reg-name
@@ -1776,7 +1784,7 @@ HttpGetHost(char **View, char *ViewEnd, http_parse_ctx *Ctx)
  }
  else
  {
-  Ctx->HostDomainNameLn = HttpGetRegisteredName(View, ViewEnd, Ctx->HostDomainName, sizeof(Ctx->HostDomainName));
+  Ctx->HostDomainNameLn = HttpGetDomainName(View, ViewEnd, Ctx->HostDomainName, sizeof(Ctx->HostDomainName));
   if (Ctx->HostDomainNameLn)
   {
    Ctx->HostKind = HttpHostDomain;
@@ -1787,7 +1795,6 @@ HttpGetHost(char **View, char *ViewEnd, http_parse_ctx *Ctx)
  return 0;
 }
 
-// todo test?
 static uint32_t
 HttpGetPort(char **View, char *ViewEnd, http_parse_ctx *Ctx)
 {
@@ -1920,7 +1927,7 @@ HttpParseRequest(char *Arr, size_t ArrLn, http_parse_ctx *Ctx)
  char *Lf = "\n";
  char *Crlf = "\r\n";
 
- // parse first ilne
+ // parse first line
  if (ViewCmpShift(&View, ViewEnd, HttpGetStr, strlen(HttpGetStr)))
  {
   Ctx->MethodType = HttpMethodGet;
@@ -1996,5 +2003,3 @@ HttpCreateResponse(char * Status, char *MimeType, uint32_t MimeTypeLn, char *Bod
   return 0;
  }
 }
-
-// todo add more start < end checks in other fns?

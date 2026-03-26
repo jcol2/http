@@ -365,9 +365,9 @@ HttpGetHostTest()
   Ret &= Ctx.HostIpv4 == 0x0000A8C0;
  }
 
- // string
+ // string should be canonicalized
  {
-  char *Str = "asdf.com";
+  char *Str = "AsDf.com.";
   char *View = Str;
   char *ViewEnd = Str + strlen(Str);
   http_parse_ctx Ctx = {0};
@@ -379,42 +379,22 @@ HttpGetHostTest()
   Ret &= StrEq(Ctx.HostDomainName, Ctx.HostDomainNameLn, Expect, strlen(Expect));
  }
 
- // pct decode
- {
-  char *Str = "as%20df";
-  char *View = Str;
-  char *ViewEnd = Str + strlen(Str);
-  http_parse_ctx Ctx = {0};
-  char *Expect = "as df";
-
-  uint32_t Res = HttpGetHost(&View, ViewEnd, &Ctx);
-  Ret &= Res;
-  Ret &= Ctx.HostKind == HttpHostDomain;
-  Ret &= StrEq(Ctx.HostDomainName, Ctx.HostDomainNameLn, Expect, strlen(Expect));
- }
-
- // utf8 validation
- {
-  char *Str = "as%f4%90%80%80df";
-  char *View = Str;
-  char *ViewEnd = Str + strlen(Str);
-  http_parse_ctx Ctx = {0};
-
-  uint32_t Res = HttpGetHost(&View, ViewEnd, &Ctx);
-  Ret &= !Res;
-  Ret &= Ctx.HostKind == HttpHostInvalid;
- }
-
  // takes 253 bytes off
  {
   char Str[260] = {0};
   memset(Str, 'a', sizeof(Str));
+  Str[63] = '.';
+  Str[127] = '.';
+  Str[191] = '.';
   Str[sizeof(Str) - 1] = 0;
   char *View = Str;
   char *ViewEnd = Str + strlen(Str);
   http_parse_ctx Ctx = {0};
   char Expect[254] = {0};
   memset(Expect, 'a', sizeof(Expect));
+  Expect[63] = '.';
+  Expect[127] = '.';
+  Expect[191] = '.';
   Expect[sizeof(Expect) - 1] = 0;
 
   uint32_t Res = HttpGetHost(&View, ViewEnd, &Ctx);
@@ -423,6 +403,18 @@ HttpGetHostTest()
   Ret &= StrEq(Ctx.HostDomainName, Ctx.HostDomainNameLn, Expect, strlen(Expect));
  }
 
+ // fails on 64 byte names
+ {
+  char Str[65] = {0};
+  memset(Str, 'a', sizeof(Str));
+  Str[sizeof(Str) - 1] = 0;
+  char *View = Str;
+  char *ViewEnd = Str + strlen(Str);
+  http_parse_ctx Ctx = {0};
+
+  uint32_t Res = HttpGetHost(&View, ViewEnd, &Ctx);
+  Ret &= !Res;
+ }
 
  if (Ret)
  {
@@ -454,10 +446,51 @@ HttpParseRequestTest()
 
   uint32_t Res = HttpParseRequest(InStr, InStrLn, &Ctx);
 
+  char *ExpectHost = "localhost";
   char *ExpectPath = "/asdf";
   Ret &= Res;
   Ret &= Ctx.MethodType == HttpMethodGet;
+  Ret &= Ctx.HostKind == HttpHostDomain;
+  Ret &= StrEq(ExpectHost, strlen(ExpectHost), Ctx.HostDomainName, Ctx.HostDomainNameLn);
+  Ret &= Ctx.HostPort == 3000;
   Ret &= StrEq(ExpectPath, strlen(ExpectPath), Ctx.Path, Ctx.PathLn);
+  Ret &= Ctx.LinebreakStyle == HttpLinebreakCrlf;
+  Ret &= Ctx.ConnectionKind == HttpConnectionUndefined;
+ }
+
+ {
+  char *InStr =
+   "GET /asdf HTTP/1.1\n"
+   "Host: localhost:3000\n"
+   "Connection: keep-alive\n"
+   "Cache-Control: max-age=0\n"
+   "sec-ch-ua: \"Chromium\";v=\"146\", \"Not-A.Brand\";v=\"24\", \"Microsoft Edge\";v=\"146\"\n"
+   "sec-ch-ua-mobile: ?0\n"
+   "sec-ch-ua-platform: \"Windows\"\n"
+   "Upgrade-Insecure-Requests: 1\n"
+   "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0\n"
+   "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7\n"
+   "Sec-Fetch-Site: none\n"
+   "Sec-Fetch-Mode: navigate\n"
+   "Sec-Fetch-User: ?1\n"
+   "Sec-Fetch-Dest: document\n"
+   "Accept-Encoding: gzip, deflate, br, zstd\n"
+   "Accept-Language: en-US,en;q=0.9\n";
+  size_t InStrLn = strlen(InStr);
+  http_parse_ctx Ctx = {0};
+
+  uint32_t Res = HttpParseRequest(InStr, InStrLn, &Ctx);
+
+  char *ExpectHost = "localhost";
+  char *ExpectPath = "/asdf";
+  Ret &= Res;
+  Ret &= Ctx.MethodType == HttpMethodGet;
+  Ret &= Ctx.HostKind == HttpHostDomain;
+  Ret &= StrEq(ExpectHost, strlen(ExpectHost), Ctx.HostDomainName, Ctx.HostDomainNameLn);
+  Ret &= Ctx.HostPort == 3000;
+  Ret &= StrEq(ExpectPath, strlen(ExpectPath), Ctx.Path, Ctx.PathLn);
+  Ret &= Ctx.LinebreakStyle == HttpLinebreakLf;
+  Ret &= Ctx.ConnectionKind == HttpConnectionKeepAlive;
  }
 
  if (Ret)

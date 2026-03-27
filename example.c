@@ -83,6 +83,16 @@ wmain(int32_t ArgC, void **ArgV)
  }
 
  SOCKET ServerSck = socket(AF_INET, SOCK_STREAM, 0);
+ LPFN_TRANSMITFILE TransmitFileFn = 0;
+ {
+  GUID Guid = WSAID_TRANSMITFILE;
+  DWORD Bytes = 0;
+  if (WSAIoctl(ServerSck, SIO_GET_EXTENSION_FUNCTION_POINTER, &Guid, sizeof(Guid), &TransmitFileFn, sizeof(TransmitFileFn), &Bytes, 0, 0) == SOCKET_ERROR)
+  {
+   puts("WSAIoctl failed to get TransmitFile");
+   return 1;
+  }
+ }
  SOCKADDR_IN Server = {
   .sin_family = AF_INET,
   .sin_addr.s_addr = INADDR_ANY,
@@ -102,21 +112,31 @@ wmain(int32_t ArgC, void **ArgV)
   http_parse_ctx Ctx = {0};
   char ResArr[8192] = {0};
   size_t ResWriteLn = 0;
+  wchar_t FilePath[MAX_PATH] = {0};
+  HANDLE File = INVALID_HANDLE_VALUE;
   if (HttpParseRequest(RecArr, WriteLn, &Ctx))
   {
    printf("Received request at: %.*s:%d%.*s\n", (int)Ctx.HostDomainNameLn, Ctx.HostDomainName, Ctx.HostPort, (int)Ctx.PathLn, Ctx.Path);
-   char *MimeType = "text/html";
-   char *Body = "<html><body><h1>Hello from C HTTP Server</h1></body></html>";
-   ResWriteLn = HttpCreateResponse(Http200, MimeType, (uint32_t)strlen(MimeType), Body, strlen(Body), ResArr, sizeof(ResArr));
+
+   size_t FilePathLn = HttpResolveReqFilePath(L".", Ctx.Path, Ctx.PathLn, FilePath, sizeof(FilePath));
+   if (FilePathLn)
+   {
+    printf("Requested fpath: %S\n", FilePath);
+
+    char *MimeType = MimeLookupPathW(FilePath, FilePathLn + 1);
+    char *Body = "";
+    ResWriteLn = HttpCreateResponse(Http200, MimeType, (uint32_t)strlen(MimeType), Body, strlen(Body), ResArr, sizeof(ResArr));
+    File = CreateFileW(FilePath, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING,  0, 0);
+   }
   }
 
-  // todo use the path to create full file path
-  // todo read the file
-  // todo extract mime
-
-  if (ResWriteLn)
+  if (ResWriteLn && File != INVALID_HANDLE_VALUE)
   {
-   send(ClientSck, ResArr, (int32_t)ResWriteLn, 0);
+   TRANSMIT_FILE_BUFFERS Buffers = {
+    .Head = ResArr,
+    .HeadLength = (DWORD)ResWriteLn,
+   };
+   TransmitFileFn(ClientSck, File, 0, 0, 0, &Buffers, 0);
   }
   else
   {
@@ -132,6 +152,7 @@ wmain(int32_t ArgC, void **ArgV)
     send(ClientSck, Http400Response, (int32_t)strlen(Http400Response), 0);
   }
 
+  CloseHandle(File);
   closesocket(ClientSck);
  }
 

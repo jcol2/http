@@ -4,6 +4,7 @@
 #include <Windows.h>
 #include <PathCch.h>
 #include <winsock2.h>
+#include <MSWSock.h>
 #include <ws2tcpip.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -1229,36 +1230,6 @@ struct http_parse_ctx
 };
 
 
-// typedef struct http_fpath http_fpath;
-// struct http_fpath
-// {
-//  wchar_t Path[MAX_PATH];
-//  uint32_t Ln;
-// };
-
-// static http_fpath
-// HttpResolveFpathFromWStr(wchar_t *Path)
-// {
-//  http_fpath Ret = {0};
-//  Ret.Ln = GetFullPathNameW(Path, MAX_PATH, Ret.Path, 0);
-//  return Ret;
-// }
-
-// static void
-// HttpResolveReqFpath(http_ctx *Ctx, http_fpath *BaseDir, http_fpath *Out)
-// {
-//  wchar_t CatStr[MAX_PATH] = {0};
-//  wcscat_s(CatStr, MAX_PATH, BaseDir->Path);
-//  wcsncat_s(CatStr, MAX_PATH, Ctx->Req->CookedUrl.pAbsPath, Ctx->Req->CookedUrl.AbsPathLength);
-
-//  Out->Ln = GetFullPathNameW(CatStr, MAX_PATH, Out->Path, 0);
-//  if (Out->Ln < BaseDir->Ln)
-//  {
-//   *Out = (http_fpath){0};
-//  }
-// }
-
-
 
 // Helpers
 
@@ -1597,7 +1568,7 @@ HttpEvaluateSegment(char *Start, char *End, char **Out, char *OutEnd)
  return 1;
 }
 
-static uint32_t
+static size_t
 HttpGetPath(char **View, char *ViewEnd, char *Out, size_t OutLn)
 {
  if ((*View >= ViewEnd) || (**View != '/'))
@@ -1633,12 +1604,9 @@ HttpGetPath(char **View, char *ViewEnd, char *Out, size_t OutLn)
  *View = PathEnd + 1;
  if (*View < ViewEnd)
  {
-  return (uint32_t)(O - Out);
+  return (size_t)(O - Out);
  }
- else
- {
-  return 0;
- }
+ return 0;
 }
 
 static uint32_t
@@ -1931,7 +1899,7 @@ HttpParseRequest(char *Arr, size_t ArrLn, http_parse_ctx *Ctx)
  if (ViewCmpShift(&View, ViewEnd, HttpGetStr, strlen(HttpGetStr)))
  {
   Ctx->MethodType = HttpMethodGet;
-  Ctx->PathLn = HttpGetPath(&View, ViewEnd, Ctx->Path, sizeof(Ctx->Path));
+  Ctx->PathLn = (uint16_t)HttpGetPath(&View, ViewEnd, Ctx->Path, sizeof(Ctx->Path));
   if (Ctx->PathLn)
   {
    if (ViewCmpShift(&View, ViewEnd, Version, strlen(Version)))
@@ -1972,6 +1940,38 @@ HttpParseRequest(char *Arr, size_t ArrLn, http_parse_ctx *Ctx)
  }
 
  return 0;
+}
+
+// specifically to cat the req file path with the dir being served
+// will try to prevent dirwalking, although the parser should stop this as well
+static size_t
+HttpResolveReqFilePath(wchar_t *BaseDir, char *Path, size_t PathLn, wchar_t *Out, size_t OutCapacityBytes)
+{
+ size_t Ret = 0;
+ wchar_t ResolvedBaseDir[MAX_PATH] = {0};
+ size_t ResolvedBaseDirLn = GetFullPathNameW(BaseDir, sizeof(ResolvedBaseDir), ResolvedBaseDir, 0);
+
+ wchar_t PathW[MAX_PATH] = {0};
+ size_t PathWLn = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, Path, (int)PathLn, PathW, HttpArrLn(PathW));
+ if (!PathWLn)
+ {
+  return 0;
+ }
+
+ wchar_t CatStr[MAX_PATH] = {0};
+ if ((ResolvedBaseDirLn + PathWLn) > sizeof(CatStr))
+ {
+  return 0;
+ }
+ wcsncat_s(CatStr, sizeof(CatStr), ResolvedBaseDir, ResolvedBaseDirLn);
+ wcsncat_s(CatStr, sizeof(CatStr), PathW, PathWLn);
+ Ret = GetFullPathNameW(CatStr, (DWORD)OutCapacityBytes, Out, 0);
+ // check for dirwalking
+ if (Ret < ResolvedBaseDirLn)
+ {
+  return 0;
+ }
+ return Ret;
 }
 
 static size_t

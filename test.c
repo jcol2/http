@@ -258,7 +258,7 @@ HttpGetPathTest()
   char * Expect        = "/asdf";
   size_t ExpectLn      = strlen(Expect);
 
-  uint32_t WriteLn     = HttpGetPath(&In, InEnd, Out, sizeof(Out));
+  size_t WriteLn     = HttpGetPath(&In, InEnd, Out, sizeof(Out));
 
   Ret &= !!WriteLn;
   Ret &= In == (Path + 6);
@@ -276,7 +276,7 @@ HttpGetPathTest()
   char * Expect        = "/as df";
   size_t ExpectLn      = strlen(Expect);
 
-  uint32_t WriteLn     = HttpGetPath(&In, InEnd, Out, sizeof(Out));
+  size_t WriteLn     = HttpGetPath(&In, InEnd, Out, sizeof(Out));
 
   Ret &= !!WriteLn;
   Ret &= In == (Path + 9);
@@ -292,7 +292,7 @@ HttpGetPathTest()
   char * InEnd         = Path + PathLn; 
   char   Out[MAX_PATH] = {0};
 
-  uint32_t WriteLn     = HttpGetPath(&In, InEnd, Out, sizeof(Out));
+  size_t WriteLn     = HttpGetPath(&In, InEnd, Out, sizeof(Out));
 
   Ret &= !WriteLn;
  }

@@ -39,29 +39,24 @@ DebugReadFile(LPCWSTR Name, uint32_t *BytesRead)
  return Ret;
 }
 
-static wchar_t *
-GetInputDir(int Argc, wchar_t *Argv[])
+int
+wmain(int32_t ArgC, wchar_t **ArgV)
 {
- wchar_t *InputDir;
- if (Argc == 2)
+ wchar_t *InputDir = 0;
+ if (ArgC == 2)
  {
-  InputDir = Argv[1];
+  InputDir = ArgV[1];
  }
- if (Argc < 2)
+ else if (ArgC < 2)
  {
   InputDir = L".";
  }
- else if (Argc > 2)
+ else if (ArgC > 2)
  {
-  printf("Too many args.");
-  InputDir = 0;
+  printf("Usage:\n%S [dir]\n", ArgV[0]);
+  return 1;
  }
- return InputDir;
-}
 
-int
-wmain(int32_t ArgC, void **ArgV)
-{
  uint16_t Port = 3000;
 
  WORD VersionRequested = MAKEWORD(2, 2);
@@ -118,7 +113,7 @@ wmain(int32_t ArgC, void **ArgV)
   {
    printf("Received request at: %.*s:%d%.*s\n", (int)Ctx.HostDomainNameLn, Ctx.HostDomainName, Ctx.HostPort, (int)Ctx.PathLn, Ctx.Path);
 
-   size_t FilePathLn = HttpResolveReqFilePath(L".", Ctx.Path, Ctx.PathLn, FilePath, sizeof(FilePath));
+   size_t FilePathLn = HttpResolveReqFilePath(InputDir, Ctx.Path, Ctx.PathLn, FilePath, sizeof(FilePath));
    if (FilePathLn)
    {
     printf("Requested fpath: %S\n", FilePath);
